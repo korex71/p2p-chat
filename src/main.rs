@@ -6,7 +6,7 @@ use iroh_gossip::{
     proto::TopicId,
 };
 use futures_lite::StreamExt;
-use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId, SecretKey};
+use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
@@ -68,7 +68,6 @@ async fn main() -> Result<()> {
     };
     println!("-> ticket to join us: {ticket}");
 
-    let rand_id = TopicId::from_bytes(rand::random());
     let node_ids = nodes.iter().map(|p| p.node_id).collect();
     if nodes.is_empty() {
         println!("-> waiting for nodes to join us");
