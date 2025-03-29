@@ -4,5 +4,5 @@
 cargo run -- --name kore open
 ```
 ```terminal
-cargo run -- --name kernel open {ticket}
+cargo run -- --name kernel join {ticket}
 ```
