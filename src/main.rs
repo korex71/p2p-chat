@@ -8,6 +8,8 @@ use iroh_gossip::{
 use futures_lite::StreamExt;
 use iroh::{protocol::Router, Endpoint, NodeAddr, NodeId};
 use serde::{Deserialize, Serialize};
+use chrono::Local;
+use std::sync::{Arc, Mutex};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -34,12 +36,12 @@ async fn main() -> Result<()> {
     let (topic, nodes) = match &args.command {
         Command::Open => {
             let topic = TopicId::from_bytes(rand::random());
-            println!("> opening topic {topic}");
+            println!("-> opening topic id {topic}");
             (topic, vec![])
         }
         Command::Join { ticket } => {
             let Ticket { topic, nodes } = Ticket::from_str(ticket)?;
-            println!("> joining topic {topic}");
+            println!("-> joining topic id {topic}");
             (topic, nodes)
         }
     };
@@ -83,7 +85,7 @@ async fn main() -> Result<()> {
     println!("-> connected");
 
     // broadcast our name, if set
-    if let Some(name) = args.name {
+    if let Some(name) = args.name.clone() {
         let message = Message::AboutMe {
             from: endpoint.node_id(),
             name,
@@ -91,26 +93,57 @@ async fn main() -> Result<()> {
         sender.broadcast(message.to_vec().into()).await?;
     }
 
-    tokio::spawn(subscribe_loop(receiver));
+    let names = Arc::new(Mutex::new(HashMap::new()));
+    let names_clone = Arc::clone(&names);
+
+    tokio::spawn(subscribe_loop(receiver, names_clone));
 
     let (line_tx, mut line_rx) = tokio::sync::mpsc::channel(1);
     
     std::thread::spawn(move || input_loop(line_tx));
 
-    println!("-> Send a message to broadcast");
+    println!("-> send a message to broadcast");
 
     while let Some(text) = line_rx.recv().await {
+        let text = text.trim().to_string();
+
+        if text.starts_with("/") {
+            match text.as_str() {
+                "/exit" => {
+                    println!("leaving chat...");
+                    break;
+                }
+                "/list" => {
+                    let names_guard = names.lock().unwrap();
+
+                    println!("user history: {:?}", names_guard.values().collect::<Vec<_>>());
+                }
+                _ => {
+                    println!("unknown command: {}", text);
+                }
+            }
+            continue;
+        }
+
         let message = Message::Message {
             from: endpoint.node_id(),
             text: text.clone(),
         };
+
         sender.broadcast(message.to_vec().into()).await?;
-        println!("> sent: {text}");
+
+        let name = args.name.as_ref().map_or_else(|| "you".to_string(), |n| n.clone());
+        print_message(&name, &text);
     }
 
     router_builder.shutdown().await?;
 
     Ok(())
+}
+
+fn print_message(name: &str, text: &str) {
+    let timestamp = Local::now().format("%H:%M:%S");
+    println!("\x1b[1;32m[{}]\x1b[0m \x1b[1;34m{}:\x1b[0m {}", timestamp, name, text);
 }
 
 fn input_loop(line_tx: tokio::sync::mpsc::Sender<String>) -> Result<()> {
@@ -124,20 +157,25 @@ fn input_loop(line_tx: tokio::sync::mpsc::Sender<String>) -> Result<()> {
     }
 }
 
-async fn subscribe_loop(mut receiver: GossipReceiver) -> Result<()> {
-    let mut names = HashMap::new();
+async fn subscribe_loop(mut receiver: GossipReceiver,
+    names: Arc<Mutex<HashMap<NodeId, String>>>,) -> Result<()> {
     while let Some(event) = receiver.try_next().await? {
         if let Event::Gossip(GossipEvent::Received(msg)) = event {
             match Message::from_bytes(&msg.content)? {
                 Message::AboutMe { from, name } => {
-                    names.insert(from, name.clone());
-                    println!("> {} is now {}", from.fmt_short(), name);
+                    let mut names_guard = names.lock().unwrap();
+                    names_guard.insert(from, name.clone());
+                    println!("-> {} joined chat as {}", from.fmt_short(), name);
+                    print!("\x07");
                 }
                 Message::Message { from, text } => {
-                    let name = names
+                    let names_guard = names.lock().unwrap();
+                    let name = names_guard
                         .get(&from)
                         .map_or_else(|| from.fmt_short(), String::to_string);
-                    println!("{}: {}", name, text);
+
+                    print_message(&name, &text);
+                    print!("\x07");
                 }
             }
         }
